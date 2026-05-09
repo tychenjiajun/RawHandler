@@ -3,10 +3,8 @@ from colour_demosaicing import demosaicing_CFA_Bayer_bilinear
 import rawpy
 from typing import NamedTuple, Optional
 from RawHandler.utils import get_exif_data, sparse_representation
-from typing import Literal
-
 from RawHandler.utils import (
-    make_colorspace_matrix,
+    get_xyz_to_colorspace,
     transform_colorspace_to_rggb,
     pixel_unshuffle,
     pixel_shuffle,
@@ -42,9 +40,7 @@ class BaseRawHandler:
         pixel_array: np.ndarray,
         core_metadata: CoreRawMetadata,
         full_metadata: MetaDataHandler,
-        colorspace: Literal[
-            "camera", "XYZ", "sRGB", "AdobeRGB", "lin_rec2020"
-        ] = "lin_rec2020",
+        colorspace: str = "lin_rec2020",
         rawpy_object = None
     ):
         if not isinstance(pixel_array, np.ndarray):
@@ -140,25 +136,40 @@ class BaseRawHandler:
         channel_map[0, 1::2, 1::2] = 2  # Blue
         return channel_map
 
-    def rgb_colorspace_transform(self, colorspace=None, **kwargs) -> np.ndarray:
-        """
-        Generates a color space transformation matrix for this image.
+    def rgb_colorspace_transform(self, colorspace=None, xyz_to_colorspace=None) -> np.ndarray:
+        """Return the 3×3 matrix that converts camera RGB → target colourspace.
+
+        The camera's ``rgb_xyz_matrix`` (from rawpy) is the RGB → CIE XYZ
+        conversion.  The transform is:
+
+            target_RGB = camera_RGB @ (xyz_to_target @ rgb_xyz_matrix).T
+
+        Parameters
+        ----------
+        colorspace : str
+            Target colourspace (e.g. ``"sRGB"``, ``"Display P3"``, ``"XYZ"``,
+            ``"camera"``).  Defaults to the instance ``colorspace`` attribute.
+        xyz_to_colorspace : np.ndarray, optional
+            A custom 3×3 XYZ → linear RGB matrix. If provided, ``colorspace``
+            is ignored (except ``"camera"`` and ``"XYZ"`` shortcuts).
+
+        Returns
+        -------
+        np.ndarray
+            3×3 transformation matrix.
         """
         colorspace = colorspace or self.colorspace
         if colorspace == "camera":
-            return np.array(
-                [
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ]
-            )
-        rgb_to_xyz = np.linalg.inv(self.core_metadata.rgb_xyz_matrix[:3])
-        if colorspace == "XYZ":
-            return rgb_to_xyz
+            return np.eye(3)
 
-        transform = make_colorspace_matrix(rgb_to_xyz, colorspace=colorspace, **kwargs)
-        return transform
+        camera_rgb_to_xyz = self.core_metadata.rgb_xyz_matrix[:3]
+
+        if xyz_to_colorspace is None:
+            if colorspace == "XYZ":
+                return camera_rgb_to_xyz
+            xyz_to_colorspace = get_xyz_to_colorspace(colorspace)
+
+        return xyz_to_colorspace @ camera_rgb_to_xyz
 
     def apply_colorspace_transform(
         self,
@@ -168,7 +179,10 @@ class BaseRawHandler:
         clip=False,
     ) -> np.ndarray:
         """
-        Converts or returns rggb data converted into specified colorspace.
+        Converts or returns rggb data converted into specified RGB colorspace.
+
+        For non-RGB / perceptual colourspaces (CIELAB, Oklab, etc.),
+        use :meth:`to_perceptual` instead.
         """
         img = self._adjust_bayer_bw_levels(dims=dims)
         rggb = pixel_unshuffle(img, 2)

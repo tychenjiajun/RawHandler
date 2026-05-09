@@ -1,5 +1,6 @@
 import numpy as np
 from itertools import product
+import colour
 
 
 def download_file_requests(url, local_filename):
@@ -94,36 +95,31 @@ def transform_colorspace_to_rggb(transform):
 
 
 def get_xyz_to_colorspace(colorspace):
-    if colorspace == "identity":
-        xyz_to_colorspace = [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ]
-    if colorspace == "sRGB":
-        xyz_to_colorspace = [
-            [3.2404542, -1.5371385, -0.4985314],
-            [-0.9692660, 1.8760108, 0.0415560],
-            [0.0556434, -0.2040259, 1.0572252],
-        ]
-    elif colorspace == "AdobeRGB":
-        xyz_to_colorspace = [
-            [2.0413690, -0.5649464, -0.3446944],
-            [-0.9692660, 1.8760108, 0.0415560],
-            [0.0134474, -0.1183897, 1.0154096],
-        ]
-    elif colorspace == "lin_rec2020":
-        xyz_to_colorspace = [
-            [1.71666343, -0.35567332, -0.25336809],
-            [-0.66667384, 1.61645574, 0.0157683],
-            [0.01764248, -0.04277698, 0.94224328],
-        ]
-    assert xyz_to_colorspace is not None, (
-        "Color space not supported, please supply color space."
-    )
+    """Return the 3×3 XYZ → *linear* RGB matrix for *colorspace*.
 
-    xyz_to_colorspace = np.array(xyz_to_colorspace)
-    return xyz_to_colorspace
+    Supports all 96 RGB colourspaces from colour-science:
+    https://colour.readthedocs.io/en/develop/generated/colour.RGB_COLOURSPACES.html
+
+    Legacy aliases for backward compatibility:
+        "identity" → identity matrix
+        "AdobeRGB" → "Adobe RGB (1998)"
+        "lin_rec2020" → "ITU-R BT.2020"
+    """
+    alias_map = {
+        "identity": "identity",
+        "AdobeRGB": "Adobe RGB (1998)",
+        "lin_rec2020": "ITU-R BT.2020",
+    }
+    resolved = alias_map.get(colorspace, colorspace)
+
+    if resolved == "identity":
+        return np.eye(3)
+
+    # colour.XYZ_to_RGB accepts a colourspace name string and transforms
+    # the given XYZ values. We transform the identity basis to extract the matrix.
+    xyz_basis = np.eye(3)  # columns are [1,0,0], [0,1,0], [0,0,1] in XYZ
+    rgb = colour.XYZ_to_RGB(xyz_basis, colourspace=resolved)
+    return rgb.T  # shape (3, 3)
 
 
 def get_colorspace_to_xyz(colorspace):
